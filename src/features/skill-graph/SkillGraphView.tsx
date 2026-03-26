@@ -70,6 +70,8 @@ const SkillGraphView = () => {
   const [zoomLevel, setZoomLevel] = useState(1);
   const [dimensions, setDimensions] = useState({ width: 1024, height: 720 });
   const [hiddenGroups, setHiddenGroups] = useState<Set<string>>(new Set());
+  const [revealedNodeIds, setRevealedNodeIds] = useState<Set<string>>(new Set());
+  const [revealedLinkIds, setRevealedLinkIds] = useState<Set<string>>(new Set());
 
   const availableGroups = useMemo(
     () =>
@@ -107,6 +109,17 @@ const SkillGraphView = () => {
     () => pathLinkIds.filter((linkId) => visibleLinkIds.has(linkId)),
     [pathLinkIds, visibleLinkIds]
   );
+  const animatedGraphData = useMemo<GraphData>(() => {
+    const nodes = visibleGraphData.nodes.filter((node) => revealedNodeIds.has(node.id));
+    const links = visibleGraphData.links.filter((link) => {
+      const linkId = createLinkId(link);
+      const sourceId = typeof link.source === 'string' ? link.source : link.source.id;
+      const targetId = typeof link.target === 'string' ? link.target : link.target.id;
+      return revealedLinkIds.has(linkId) && revealedNodeIds.has(sourceId) && revealedNodeIds.has(targetId);
+    });
+
+    return { nodes, links };
+  }, [revealedLinkIds, revealedNodeIds, visibleGraphData.links, visibleGraphData.nodes]);
 
   const baseHighlight = useMemo(
     () =>
@@ -183,9 +196,81 @@ const SkillGraphView = () => {
     };
   }, []);
 
+  useEffect(() => {
+    const visibleNodeOrder = visibleGraphData.nodes.map((node) => node.id);
+    const visibleNodeSet = new Set(visibleNodeOrder);
+    const visibleLinkOrder = visibleGraphData.links.map((link) => createLinkId(link));
+    const visibleLinkSet = new Set(visibleLinkOrder);
+
+    setRevealedNodeIds((current) => new Set([...current].filter((nodeId) => visibleNodeSet.has(nodeId))));
+    setRevealedLinkIds((current) => new Set([...current].filter((linkId) => visibleLinkSet.has(linkId))));
+
+    const nodeTimers = visibleNodeOrder.map((nodeId, index) =>
+      window.setTimeout(() => {
+        setRevealedNodeIds((current) => {
+          if (!visibleNodeSet.has(nodeId) || current.has(nodeId)) {
+            return current;
+          }
+
+          const next = new Set(current);
+          next.add(nodeId);
+          return next;
+        });
+      }, index * 45)
+    );
+
+    const linkTimers = visibleLinkOrder.map((linkId, index) =>
+      window.setTimeout(() => {
+        setRevealedLinkIds((current) => {
+          if (!visibleLinkSet.has(linkId) || current.has(linkId)) {
+            return current;
+          }
+
+          const next = new Set(current);
+          next.add(linkId);
+          return next;
+        });
+      }, 180 + index * 26)
+    );
+
+    return () => {
+      nodeTimers.forEach((timerId) => window.clearTimeout(timerId));
+      linkTimers.forEach((timerId) => window.clearTimeout(timerId));
+    };
+  }, [visibleGraphData]);
+
   const handleEngineStop = useCallback(() => {
     graphRef.current?.zoomToFit(280, 80);
   }, []);
+
+  const gatherNodesAroundMe = useCallback(() => {
+    const graph = graphRef.current;
+    if (!graph || visibleGraphData.nodes.length === 0) {
+      return;
+    }
+
+    const meNode =
+      visibleGraphData.nodes.find((node) => node.id === 'user:me') ??
+      visibleGraphData.nodes.find((node) => node.type === 'user') ??
+      visibleGraphData.nodes[0];
+    const centerX = typeof meNode.x === 'number' ? meNode.x : 0;
+    const centerY = typeof meNode.y === 'number' ? meNode.y : 0;
+
+    visibleGraphData.nodes.forEach((node) => {
+      if (node.id === meNode.id || typeof node.x !== 'number' || typeof node.y !== 'number') {
+        return;
+      }
+
+      node.x = centerX + (node.x - centerX) * 0.68;
+      node.y = centerY + (node.y - centerY) * 0.68;
+      node.vx = (node.vx ?? 0) * 0.45;
+      node.vy = (node.vy ?? 0) * 0.45;
+    });
+
+    graph.d3ReheatSimulation();
+    graph.centerAt(centerX, centerY, GRAPH_INTERACTION.focusAnimationMs);
+    graph.zoom(1.35, GRAPH_INTERACTION.focusAnimationMs);
+  }, [visibleGraphData.nodes]);
 
   const focusNode = useCallback(
     (nodeId: string) => {
@@ -395,7 +480,7 @@ const SkillGraphView = () => {
       )
       .strength((link: GraphLink) => (link as GraphLink).strength ?? GRAPH_PHYSICS.linkStrength);
     graph.d3ReheatSimulation();
-  }, [visibleGraphData]);
+  }, [animatedGraphData]);
 
   const panelNodeTypeLabel = selectedNode ? getNodeTypeLabel(selectedNode.type) : 'None';
   const hasSearchQuery = searchQuery.trim().length > 0;
@@ -433,7 +518,7 @@ const SkillGraphView = () => {
         <div className="skill-graph-canvas" ref={containerRef}>
           <ForceGraph2D
             ref={graphRef}
-            graphData={visibleGraphData}
+            graphData={animatedGraphData}
             width={dimensions.width}
             height={dimensions.height}
             backgroundColor={GRAPH_THEME.background}
@@ -473,6 +558,18 @@ const SkillGraphView = () => {
         </div>
 
         <aside className="skill-graph-panel">
+          <div className="skill-graph-panel__section">
+            <h3>Graph Controls</h3>
+            <div className="skill-graph-panel__actions">
+              <button type="button" className="skill-graph-button" onClick={gatherNodesAroundMe}>
+                Gather Around Me
+              </button>
+            </div>
+            <p className="skill-graph-panel__caption">
+              Pull visible nodes toward the central user node for a tighter cluster.
+            </p>
+          </div>
+
           <div className="skill-graph-panel__section">
             <h3>Search</h3>
             <input
