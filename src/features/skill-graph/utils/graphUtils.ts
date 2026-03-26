@@ -1,5 +1,5 @@
 import { GRAPH_COLORS, GRAPH_NODE_SIZE } from '../constants/graphConfig';
-import type { AdjacencyMaps, GraphData, GraphLink, GraphNode, HighlightState, NodeId } from '../types/graph';
+import type { AdjacencyMaps, GraphData, GraphLink, GraphNode, HighlightState, NodeId, PathState } from '../types/graph';
 
 const resolveNodeId = (value: string | GraphNode): string => (typeof value === 'string' ? value : value.id);
 
@@ -120,6 +120,191 @@ export const deriveHighlightState = ({
   for (const linkId of adjacency.linksByNode.get(rootNodeId) ?? []) {
     highlightedLinks.add(linkId);
   }
+
+  return { highlightedNodes, highlightedLinks };
+};
+
+export const buildSearchableText = (node: GraphNode): string => {
+  const metadataText = node.metadata
+    ? Object.entries(node.metadata)
+        .flatMap(([key, value]) => [key, value])
+        .join(' ')
+    : '';
+
+  return [node.id, node.label, node.group, node.type, metadataText]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+};
+
+export const findNodeIdsByQuery = (nodes: GraphNode[], query: string): Set<NodeId> => {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return new Set<NodeId>();
+  }
+
+  return new Set(
+    nodes
+      .filter((node) => buildSearchableText(node).includes(normalizedQuery))
+      .map((node) => node.id)
+  );
+};
+
+export const findDirectedPath = (graph: GraphData, sourceNodeId: NodeId, targetNodeId: NodeId): PathState => {
+  if (sourceNodeId === targetNodeId) {
+    return { pathNodeIds: [sourceNodeId], pathLinkIds: [], pathCount: 1 };
+  }
+
+  const outgoingLinksByNode = new Map<NodeId, Array<{ nextNodeId: NodeId; linkId: string }>>();
+  for (const node of graph.nodes) {
+    outgoingLinksByNode.set(node.id, []);
+  }
+
+  for (const link of graph.links) {
+    const source = resolveNodeId(link.source);
+    const target = resolveNodeId(link.target);
+    outgoingLinksByNode.get(source)?.push({
+      nextNodeId: target,
+      linkId: createLinkId(link)
+    });
+  }
+
+  const queue: NodeId[] = [sourceNodeId];
+  const visited = new Set<NodeId>([sourceNodeId]);
+  const previousByNode = new Map<NodeId, { nodeId: NodeId; linkId: string }>();
+
+  while (queue.length > 0) {
+    const currentNodeId = queue.shift();
+    if (!currentNodeId) {
+      break;
+    }
+
+    for (const edge of outgoingLinksByNode.get(currentNodeId) ?? []) {
+      if (visited.has(edge.nextNodeId)) {
+        continue;
+      }
+
+      visited.add(edge.nextNodeId);
+      previousByNode.set(edge.nextNodeId, {
+        nodeId: currentNodeId,
+        linkId: edge.linkId
+      });
+
+      if (edge.nextNodeId === targetNodeId) {
+        const pathNodeIds: NodeId[] = [targetNodeId];
+        const pathLinkIds: string[] = [];
+        let cursor = targetNodeId;
+
+        while (cursor !== sourceNodeId) {
+          const previous = previousByNode.get(cursor);
+          if (!previous) {
+            return { pathNodeIds: [], pathLinkIds: [], pathCount: 0 };
+          }
+
+          pathNodeIds.unshift(previous.nodeId);
+          pathLinkIds.unshift(previous.linkId);
+          cursor = previous.nodeId;
+        }
+
+        return { pathNodeIds, pathLinkIds, pathCount: 1 };
+      }
+
+      queue.push(edge.nextNodeId);
+    }
+  }
+
+  return { pathNodeIds: [], pathLinkIds: [], pathCount: 0 };
+};
+
+export const findAllDirectedPaths = (
+  graph: GraphData,
+  sourceNodeId: NodeId,
+  targetNodeId: NodeId,
+  maxPathCount = 256
+): PathState => {
+  if (sourceNodeId === targetNodeId) {
+    return { pathNodeIds: [sourceNodeId], pathLinkIds: [], pathCount: 1 };
+  }
+
+  const outgoingLinksByNode = new Map<NodeId, Array<{ nextNodeId: NodeId; linkId: string }>>();
+  for (const node of graph.nodes) {
+    outgoingLinksByNode.set(node.id, []);
+  }
+
+  for (const link of graph.links) {
+    const source = resolveNodeId(link.source);
+    const target = resolveNodeId(link.target);
+    outgoingLinksByNode.get(source)?.push({
+      nextNodeId: target,
+      linkId: createLinkId(link)
+    });
+  }
+
+  const pathNodeSet = new Set<NodeId>();
+  const pathLinkSet = new Set<string>();
+  let pathCount = 0;
+
+  const visit = (
+    currentNodeId: NodeId,
+    visitedNodeIds: Set<NodeId>,
+    currentNodeIds: NodeId[],
+    currentLinkIds: string[]
+  ): void => {
+    if (pathCount >= maxPathCount) {
+      return;
+    }
+
+    if (currentNodeId === targetNodeId) {
+      pathCount += 1;
+      currentNodeIds.forEach((nodeId) => pathNodeSet.add(nodeId));
+      currentLinkIds.forEach((linkId) => pathLinkSet.add(linkId));
+      return;
+    }
+
+    for (const edge of outgoingLinksByNode.get(currentNodeId) ?? []) {
+      if (visitedNodeIds.has(edge.nextNodeId)) {
+        continue;
+      }
+
+      visitedNodeIds.add(edge.nextNodeId);
+      currentNodeIds.push(edge.nextNodeId);
+      currentLinkIds.push(edge.linkId);
+
+      visit(edge.nextNodeId, visitedNodeIds, currentNodeIds, currentLinkIds);
+
+      currentLinkIds.pop();
+      currentNodeIds.pop();
+      visitedNodeIds.delete(edge.nextNodeId);
+    }
+  };
+
+  visit(sourceNodeId, new Set<NodeId>([sourceNodeId]), [sourceNodeId], []);
+
+  return {
+    pathNodeIds: [...pathNodeSet],
+    pathLinkIds: [...pathLinkSet],
+    pathCount
+  };
+};
+
+export const deriveActivityState = ({
+  baseHighlight,
+  matchedNodeIds,
+  pathState
+}: {
+  baseHighlight: HighlightState;
+  matchedNodeIds: Set<NodeId>;
+  pathState: PathState;
+}): HighlightState => {
+  const highlightedNodes = new Set<NodeId>([
+    ...baseHighlight.highlightedNodes,
+    ...matchedNodeIds,
+    ...pathState.pathNodeIds
+  ]);
+  const highlightedLinks = new Set<string>([
+    ...baseHighlight.highlightedLinks,
+    ...pathState.pathLinkIds
+  ]);
 
   return { highlightedNodes, highlightedLinks };
 };
