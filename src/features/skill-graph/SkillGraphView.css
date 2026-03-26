@@ -106,6 +106,13 @@ body {
   line-height: 1.45;
 }
 
+.skill-graph-panel__caption {
+  margin: 0.6rem 0 0;
+  font-size: 0.77rem;
+  color: #8ca1c4;
+  line-height: 1.45;
+}
+
 .skill-graph-panel__actions {
   display: flex;
   flex-direction: column;
@@ -137,6 +144,177 @@ body {
 .skill-graph-button--ghost {
   background: rgba(14, 23, 39, 0.8);
   border-color: #2a3d5d;
+}
+
+.skill-graph-input {
+  width: 100%;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid #223752;
+  background: rgba(7, 12, 21, 0.92);
+  color: #eff6ff;
+  padding: 0 0.8rem;
+  outline: none;
+}
+
+.skill-graph-input:focus {
+  border-color: #4c85c5;
+  box-shadow: 0 0 0 3px rgba(76, 133, 197, 0.18);
+}
+
+.skill-graph-search-results {
+  margin-top: 0.7rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.skill-graph-filter-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem;
+  margin-bottom: 0.7rem;
+}
+
+.skill-graph-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.7rem;
+}
+
+.skill-graph-chip {
+  border: 1px solid #2a3d5d;
+  background: rgba(11, 19, 33, 0.88);
+  color: #8ca1c4;
+  border-radius: 999px;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.74rem;
+  cursor: pointer;
+  transition: 140ms ease;
+}
+
+.skill-graph-chip--active {
+  border-color: #4b85c9;
+  color: #edf5ff;
+  background: rgba(20, 40, 64, 0.95);
+}
+
+.skill-graph-chip:hover {
+  transform: translateY(-1px);
+}
+
+.skill-graph-result,
+.skill-graph-path-node {
+  border: 1px solid #1f3654;
+  background: rgba(9, 16, 29, 0.96);
+  border-radius: 10px;
+  padding: 0.65rem 0.8rem;
+  color: #e3eeff;
+  text-align: left;
+  cursor: pointer;
+  transition: 140ms ease;
+}
+
+.skill-graph-result:hover,
+.skill-graph-path-node:hover {
+  border-color: #4474a8;
+  transform: translateY(-1px);
+}
+
+.skill-graph-result__label,
+.skill-graph-result__meta {
+  display: block;
+}
+
+.skill-graph-result__label {
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.skill-graph-result__meta {
+  margin-top: 0.18rem;
+  font-size: 0.72rem;
+  color: #90abd1;
+}
+
+.skill-graph-kv-list {
+  display: grid;
+  gap: 0.45rem;
+  margin-bottom: 0.8rem;
+}
+
+.skill-graph-kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 10px;
+  background: rgba(10, 18, 30, 0.82);
+  border: 1px solid rgba(42, 61, 93, 0.7);
+  font-size: 0.78rem;
+}
+
+.skill-graph-kv span {
+  color: #8ca1c4;
+  text-transform: capitalize;
+}
+
+.skill-graph-kv strong {
+  color: #edf5ff;
+}
+
+.skill-graph-route-card {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.85rem;
+  border-radius: 12px;
+  border: 1px solid #1c3554;
+  background: linear-gradient(180deg, rgba(15, 26, 44, 0.95), rgba(9, 15, 25, 0.92));
+}
+
+.skill-graph-mode-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem;
+}
+
+.skill-graph-tab {
+  border: 1px solid #294d77;
+  background: rgba(12, 20, 34, 0.88);
+  color: #90abd1;
+  border-radius: 9px;
+  min-height: 34px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 140ms ease;
+}
+
+.skill-graph-tab--active {
+  background: linear-gradient(180deg, #234770, #173655);
+  color: #eff5ff;
+  border-color: #4d84bf;
+}
+
+.skill-graph-route-card__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.8rem;
+}
+
+.skill-graph-route-card__row span {
+  color: #8ca1c4;
+}
+
+.skill-graph-route-card__row strong {
+  color: #f2f7ff;
+  text-align: right;
+}
+
+.skill-graph-path-list {
+  display: grid;
+  gap: 0.45rem;
 }
 
 .skill-graph-list {

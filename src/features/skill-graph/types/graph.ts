@@ -46,10 +46,17 @@ export interface GraphExpansionPayload {
 }
 
 export type NodeId = GraphNode['id'];
+export type PathMode = 'shortest' | 'all';
 
 export interface HighlightState {
   highlightedNodes: Set<NodeId>;
   highlightedLinks: Set<string>;
+}
+
+export interface PathState {
+  pathNodeIds: NodeId[];
+  pathLinkIds: string[];
+  pathCount: number;
 }
 
 export interface AdjacencyMaps {

@@ -7,16 +7,35 @@ import {
 } from './constants/graphConfig';
 import { useSkillGraphData } from './hooks/useSkillGraphData';
 import {
+  buildAdjacencyMaps,
   createLinkId,
+  deriveActivityState,
   deriveHighlightState,
   shouldDimNode,
   shouldShowNodeLabel
 } from './utils/graphUtils';
-import type { GraphLink, GraphNode } from './types/graph';
+import type { GraphData, GraphLink, GraphNode, PathMode } from './types/graph';
 import './SkillGraphView.css';
 
 const getNodeColor = (node: GraphNode): string => node.color ?? '#8ecaff';
 
+const getNodeTypeLabel = (nodeType: GraphNode['type']): string =>
+  nodeType.replace('skill', 'skill ').replace(/^./, (char) => char.toUpperCase());
+
+const getVisibleGraphData = (graphData: GraphData, hiddenGroups: Set<string>): GraphData => {
+  const visibleNodes = graphData.nodes.filter((node) => !node.group || !hiddenGroups.has(node.group));
+  const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
+  const visibleLinks = graphData.links.filter((link) => {
+    const sourceId = typeof link.source === 'string' ? link.source : link.source.id;
+    const targetId = typeof link.target === 'string' ? link.target : link.target.id;
+    return visibleNodeIds.has(sourceId) && visibleNodeIds.has(targetId);
+  });
+
+  return {
+    nodes: visibleNodes,
+    links: visibleLinks
+  };
+};
 
 const SkillGraphView = () => {
   const graphRef = useRef<ForceGraphMethods<GraphNode, GraphLink> | undefined>();
@@ -27,30 +46,118 @@ const SkillGraphView = () => {
     selectedNode,
     selectedNodeId,
     hoveredNodeId,
+    sourceNodeId,
+    targetNodeId,
+    pathMode,
+    searchQuery,
+    matchedNodeIds,
+    pathNodeIds,
+    pathLinkIds,
+    pathCount,
     expandedNodeIds,
     isExpanding,
-    adjacency,
     setHoveredNodeId,
     setSelectedNodeId,
+    setSourceNodeId,
+    setTargetNodeId,
+    setPathMode,
+    setSearchQuery,
     expandNode,
-    clearSelection
+    clearSelection,
+    clearRoute
   } = useSkillGraphData();
 
   const [zoomLevel, setZoomLevel] = useState(1);
   const [dimensions, setDimensions] = useState({ width: 1024, height: 720 });
+  const [hiddenGroups, setHiddenGroups] = useState<Set<string>>(new Set());
 
-  const hasActiveContext = Boolean(hoveredNodeId || selectedNodeId);
+  const availableGroups = useMemo(
+    () =>
+      [...new Set(graphData.nodes.map((node) => node.group).filter((group): group is string => Boolean(group)))].sort(),
+    [graphData.nodes]
+  );
+
+  useEffect(() => {
+    setHiddenGroups((current) => new Set([...current].filter((group) => availableGroups.includes(group))));
+  }, [availableGroups]);
+
+  const visibleGraphData = useMemo(
+    () => getVisibleGraphData(graphData, hiddenGroups),
+    [graphData, hiddenGroups]
+  );
+  const visibleNodeIds = useMemo(
+    () => new Set(visibleGraphData.nodes.map((node) => node.id)),
+    [visibleGraphData.nodes]
+  );
+  const visibleLinkIds = useMemo(
+    () => new Set(visibleGraphData.links.map((link) => createLinkId(link))),
+    [visibleGraphData.links]
+  );
+  const adjacency = useMemo(() => buildAdjacencyMaps(visibleGraphData), [visibleGraphData]);
+
+  const visibleMatchedNodeIds = useMemo(
+    () => new Set([...matchedNodeIds].filter((nodeId) => visibleNodeIds.has(nodeId))),
+    [matchedNodeIds, visibleNodeIds]
+  );
+  const visiblePathNodeIds = useMemo(
+    () => pathNodeIds.filter((nodeId) => visibleNodeIds.has(nodeId)),
+    [pathNodeIds, visibleNodeIds]
+  );
+  const visiblePathLinkIds = useMemo(
+    () => pathLinkIds.filter((linkId) => visibleLinkIds.has(linkId)),
+    [pathLinkIds, visibleLinkIds]
+  );
+
+  const baseHighlight = useMemo(
+    () =>
+      deriveHighlightState({
+        hoveredNodeId: hoveredNodeId && visibleNodeIds.has(hoveredNodeId) ? hoveredNodeId : null,
+        selectedNodeId: selectedNodeId && visibleNodeIds.has(selectedNodeId) ? selectedNodeId : null,
+        adjacency
+      }),
+    [adjacency, hoveredNodeId, selectedNodeId, visibleNodeIds]
+  );
 
   const { highlightedNodes, highlightedLinks } = useMemo(
     () =>
-      deriveHighlightState({
-        hoveredNodeId,
-        selectedNodeId,
-        adjacency
+      deriveActivityState({
+        baseHighlight,
+        matchedNodeIds: visibleMatchedNodeIds,
+        pathState: {
+          pathNodeIds: visiblePathNodeIds,
+          pathLinkIds: visiblePathLinkIds,
+          pathCount
+        }
       }),
-    [adjacency, hoveredNodeId, selectedNodeId]
+    [baseHighlight, pathCount, visibleMatchedNodeIds, visiblePathLinkIds, visiblePathNodeIds]
   );
 
+  const hasActiveContext = Boolean(
+    hoveredNodeId ||
+      selectedNodeId ||
+      visibleMatchedNodeIds.size > 0 ||
+      visiblePathNodeIds.length > 0
+  );
+
+  const matchedNodes = useMemo(
+    () => visibleGraphData.nodes.filter((node) => visibleMatchedNodeIds.has(node.id)).slice(0, 8),
+    [visibleGraphData.nodes, visibleMatchedNodeIds]
+  );
+  const sourceNode = useMemo(
+    () => graphData.nodes.find((node) => node.id === sourceNodeId) ?? null,
+    [graphData.nodes, sourceNodeId]
+  );
+  const targetNode = useMemo(
+    () => graphData.nodes.find((node) => node.id === targetNodeId) ?? null,
+    [graphData.nodes, targetNodeId]
+  );
+  const pathNodes = useMemo(
+    () =>
+      visiblePathNodeIds
+        .map((nodeId) => visibleGraphData.nodes.find((node) => node.id === nodeId) ?? null)
+        .filter((node): node is GraphNode => node !== null),
+    [visibleGraphData.nodes, visiblePathNodeIds]
+  );
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -58,7 +165,10 @@ const SkillGraphView = () => {
     }
 
     const observer = new ResizeObserver(([entry]) => {
-      if (!entry) return;
+      if (!entry) {
+        return;
+      }
+
       const { width, height } = entry.contentRect;
       setDimensions({
         width: Math.max(320, Math.floor(width)),
@@ -77,6 +187,43 @@ const SkillGraphView = () => {
     graphRef.current?.zoomToFit(280, 80);
   }, []);
 
+  const focusNode = useCallback(
+    (nodeId: string) => {
+      const node = visibleGraphData.nodes.find((item) => item.id === nodeId);
+      setSelectedNodeId(nodeId);
+
+      if (!node) {
+        return;
+      }
+
+      if (typeof node.x === 'number' && typeof node.y === 'number') {
+        graphRef.current?.centerAt(node.x, node.y, GRAPH_INTERACTION.focusAnimationMs);
+        graphRef.current?.zoom(1.9, GRAPH_INTERACTION.focusAnimationMs);
+      }
+    },
+    [setSelectedNodeId, visibleGraphData.nodes]
+  );
+
+  const toggleGroupVisibility = useCallback((group: string) => {
+    setHiddenGroups((current) => {
+      const next = new Set(current);
+      if (next.has(group)) {
+        next.delete(group);
+      } else {
+        next.add(group);
+      }
+      return next;
+    });
+  }, []);
+
+  const setAllGroupsVisible = useCallback(() => {
+    setHiddenGroups(new Set());
+  }, []);
+
+  const setOnlyNoGroupsVisible = useCallback(() => {
+    setHiddenGroups(new Set(availableGroups));
+  }, [availableGroups]);
+
   const handleNodeHover = useCallback(
     (node: GraphNode | null) => {
       const hoveredId = node?.id ?? null;
@@ -90,15 +237,9 @@ const SkillGraphView = () => {
 
   const handleNodeClick = useCallback(
     (nodeObject: GraphNode) => {
-      const node = nodeObject;
-      setSelectedNodeId(node.id);
-
-      if (typeof node.x === 'number' && typeof node.y === 'number') {
-        graphRef.current?.centerAt(node.x, node.y, GRAPH_INTERACTION.focusAnimationMs);
-        graphRef.current?.zoom(1.9, GRAPH_INTERACTION.focusAnimationMs);
-      }
+      focusNode(nodeObject.id);
     },
-    [setSelectedNodeId]
+    [focusNode]
   );
 
   const handleBackgroundClick = useCallback(() => {
@@ -110,6 +251,8 @@ const SkillGraphView = () => {
       const node = nodeObject;
       const isSelected = node.id === selectedNodeId;
       const isHovered = node.id === hoveredNodeId;
+      const isMatched = visibleMatchedNodeIds.has(node.id);
+      const isPathNode = visiblePathNodeIds.includes(node.id);
       const isHighlighted = highlightedNodes.has(node.id);
       const isDimmed = shouldDimNode({
         nodeId: node.id,
@@ -117,16 +260,31 @@ const SkillGraphView = () => {
         hasActiveContext
       });
 
-      const size = (node.size ?? 4) * (isSelected ? 1.55 : isHovered ? 1.35 : isHighlighted ? 1.2 : 1);
-      const opacity = isDimmed ? GRAPH_THEME.dimOpacity : isSelected || isHovered ? 1 : GRAPH_THEME.defaultNodeOpacity;
+      const size =
+        (node.size ?? 4) *
+        (isSelected
+          ? 1.55
+          : isHovered
+            ? 1.35
+            : isPathNode
+              ? 1.3
+              : isMatched
+                ? 1.24
+                : isHighlighted
+                  ? 1.2
+                  : 1);
+      const opacity = isDimmed
+        ? GRAPH_THEME.dimOpacity
+        : isSelected || isHovered || isMatched || isPathNode
+          ? 1
+          : GRAPH_THEME.defaultNodeOpacity;
 
       ctx.save();
-
       ctx.beginPath();
       ctx.fillStyle = getNodeColor(node);
       ctx.globalAlpha = opacity;
-      ctx.shadowBlur = isSelected || isHovered ? 14 : 6;
-      ctx.shadowColor = getNodeColor(node);
+      ctx.shadowBlur = isSelected || isHovered || isPathNode ? 14 : 6;
+      ctx.shadowColor = isPathNode ? '#ffd57a' : getNodeColor(node);
       ctx.arc(node.x ?? 0, node.y ?? 0, size, 0, 2 * Math.PI, false);
       ctx.fill();
 
@@ -136,6 +294,15 @@ const SkillGraphView = () => {
         ctx.lineWidth = 1.2;
         ctx.strokeStyle = '#d3f0ff';
         ctx.arc(node.x ?? 0, node.y ?? 0, size + 3.5, 0, 2 * Math.PI, false);
+        ctx.stroke();
+      }
+
+      if (isPathNode && !isSelected) {
+        ctx.beginPath();
+        ctx.globalAlpha = 0.6;
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = '#ffd57a';
+        ctx.arc(node.x ?? 0, node.y ?? 0, size + 2.8, 0, 2 * Math.PI, false);
         ctx.stroke();
       }
 
@@ -161,38 +328,56 @@ const SkillGraphView = () => {
 
       ctx.restore();
     },
-    [hasActiveContext, highlightedNodes, hoveredNodeId, selectedNodeId, zoomLevel]
+    [
+      hasActiveContext,
+      highlightedNodes,
+      hoveredNodeId,
+      selectedNodeId,
+      visibleMatchedNodeIds,
+      visiblePathNodeIds,
+      zoomLevel
+    ]
   );
 
   const linkColor = useCallback(
     (linkObject: GraphLink) => {
       const linkId = createLinkId(linkObject);
-
       if (!hasActiveContext) {
         return GRAPH_THEME.linkBase;
       }
 
+      if (visiblePathLinkIds.includes(linkId)) {
+        return pathMode === 'all' ? 'rgba(255, 184, 92, 0.95)' : 'rgba(255, 213, 122, 0.95)';
+      }
+
       return highlightedLinks.has(linkId) ? GRAPH_THEME.linkHighlight : 'rgba(80, 108, 145, 0.12)';
     },
-    [hasActiveContext, highlightedLinks]
+    [hasActiveContext, highlightedLinks, pathMode, visiblePathLinkIds]
   );
 
   const linkWidth = useCallback(
     (linkObject: GraphLink) => {
       const linkId = createLinkId(linkObject);
+      if (visiblePathLinkIds.includes(linkId)) {
+        return pathMode === 'all' ? 2.4 : 2.1;
+      }
+
       return highlightedLinks.has(linkId) ? 1.45 : 0.75;
     },
-    [highlightedLinks]
+    [highlightedLinks, pathMode, visiblePathLinkIds]
   );
 
   const linkDirectionalParticles = useCallback(
     (linkObject: GraphLink) => {
       const linkId = createLinkId(linkObject);
+      if (visiblePathLinkIds.includes(linkId)) {
+        return pathMode === 'all' ? 3 : 2;
+      }
+
       return highlightedLinks.has(linkId) ? 1 : 0;
     },
-    [highlightedLinks]
+    [highlightedLinks, pathMode, visiblePathLinkIds]
   );
-
 
   useEffect(() => {
     const graph = graphRef.current;
@@ -201,22 +386,46 @@ const SkillGraphView = () => {
     }
 
     graph.d3Force('charge')?.strength(GRAPH_PHYSICS.chargeStrength);
-    graph.d3Force('link')
-      ?.distance((link: GraphLink) => (link as GraphLink).strength ? Math.max(48, 140 - ((link as GraphLink).strength ?? 0) * 40) : GRAPH_PHYSICS.linkDistance)
+    graph
+      .d3Force('link')
+      ?.distance((link: GraphLink) =>
+        (link as GraphLink).strength
+          ? Math.max(48, 140 - ((link as GraphLink).strength ?? 0) * 40)
+          : GRAPH_PHYSICS.linkDistance
+      )
       .strength((link: GraphLink) => (link as GraphLink).strength ?? GRAPH_PHYSICS.linkStrength);
     graph.d3ReheatSimulation();
-  }, [graphData]);
+  }, [visibleGraphData]);
 
-  const panelNodeTypeLabel = selectedNode?.type.replace('skill', 'skill ').replace(/^./, (char) => char.toUpperCase()) ?? 'None';
+  const panelNodeTypeLabel = selectedNode ? getNodeTypeLabel(selectedNode.type) : 'None';
+  const hasSearchQuery = searchQuery.trim().length > 0;
+  const hasRouteSelection = Boolean(sourceNodeId || targetNodeId);
+  const hasResolvedPath = pathCount > 0;
+  const routeStatusText =
+    !sourceNodeId || !targetNodeId
+      ? 'Set both source and target to activate the route.'
+      : hasResolvedPath
+        ? pathMode === 'all'
+          ? `${pathCount} route(s) found. All connected route lines are active.`
+          : `${visiblePathNodeIds.length} node(s) are active on the shortest route.`
+        : sourceNodeId === targetNodeId
+          ? 'Source and target are the same node.'
+          : 'No directed route was found with the current graph.';
+
+  const hiddenGroupCount = hiddenGroups.size;
+
+  const handlePathModeChange = useCallback((mode: PathMode) => {
+    setPathMode(mode);
+  }, [setPathMode]);
 
   return (
     <div className="skill-graph-layout">
       <div className="skill-graph-header">
         <h2>Skill Relationship Graph</h2>
         <div className="skill-graph-header__meta">
-          <span>{graphData.nodes.length} nodes</span>
-          <span>{graphData.links.length} links</span>
-          <span>{isExpanding ? 'Expanding…' : 'Stable'}</span>
+          <span>{visibleGraphData.nodes.length} visible nodes</span>
+          <span>{visibleGraphData.links.length} visible links</span>
+          <span>{isExpanding ? 'Expanding...' : 'Stable'}</span>
         </div>
       </div>
 
@@ -224,7 +433,7 @@ const SkillGraphView = () => {
         <div className="skill-graph-canvas" ref={containerRef}>
           <ForceGraph2D
             ref={graphRef}
-            graphData={graphData}
+            graphData={visibleGraphData}
             width={dimensions.width}
             height={dimensions.height}
             backgroundColor={GRAPH_THEME.background}
@@ -249,7 +458,11 @@ const SkillGraphView = () => {
             linkDirectionalParticles={linkDirectionalParticles}
             linkDirectionalParticleWidth={1.4}
             linkDirectionalParticleSpeed={0.006}
-            linkDirectionalParticleColor={() => 'rgba(190,230,255,0.85)'}
+            linkDirectionalParticleColor={(link) =>
+              visiblePathLinkIds.includes(createLinkId(link as GraphLink))
+                ? 'rgba(255, 225, 159, 0.92)'
+                : 'rgba(190,230,255,0.85)'
+            }
             linkCurvature={0.06}
             cooldownTicks={GRAPH_PHYSICS.cooldownTicks}
             warmupTicks={GRAPH_PHYSICS.warmupTicks}
@@ -261,11 +474,84 @@ const SkillGraphView = () => {
 
         <aside className="skill-graph-panel">
           <div className="skill-graph-panel__section">
+            <h3>Search</h3>
+            <input
+              type="search"
+              className="skill-graph-input"
+              placeholder="Search labels, ids, types, groups, and metadata"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+            />
+            <div className="skill-graph-panel__caption">
+              {hasSearchQuery
+                ? `${visibleMatchedNodeIds.size} visible match(es) found.`
+                : 'Search covers node labels, ids, groups, types, and metadata text.'}
+            </div>
+            {hasSearchQuery && matchedNodes.length > 0 ? (
+              <div className="skill-graph-search-results">
+                {matchedNodes.map((node) => (
+                  <button
+                    key={node.id}
+                    type="button"
+                    className="skill-graph-result"
+                    onClick={() => focusNode(node.id)}
+                  >
+                    <span className="skill-graph-result__label">{node.label}</span>
+                    <span className="skill-graph-result__meta">{node.id}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="skill-graph-panel__section">
+            <h3>Group Filters</h3>
+            <div className="skill-graph-filter-actions">
+              <button type="button" className="skill-graph-button skill-graph-button--ghost" onClick={setAllGroupsVisible}>
+                Show All
+              </button>
+              <button type="button" className="skill-graph-button skill-graph-button--ghost" onClick={setOnlyNoGroupsVisible}>
+                Hide Groups
+              </button>
+            </div>
+            <div className="skill-graph-panel__caption">
+              {hiddenGroupCount > 0
+                ? `${hiddenGroupCount} group filter(s) are hidden.`
+                : 'Toggle each data group on or off.'}
+            </div>
+            <div className="skill-graph-chip-list">
+              {availableGroups.map((group) => {
+                const isVisible = !hiddenGroups.has(group);
+                return (
+                  <button
+                    key={group}
+                    type="button"
+                    className={`skill-graph-chip${isVisible ? ' skill-graph-chip--active' : ''}`}
+                    onClick={() => toggleGroupVisibility(group)}
+                  >
+                    {group}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="skill-graph-panel__section">
             <h3>Selected Node</h3>
             {selectedNode ? (
               <>
                 <div className="skill-graph-panel__label">{selectedNode.label}</div>
                 <div className="skill-graph-panel__type">{panelNodeTypeLabel}</div>
+                {selectedNode.metadata ? (
+                  <div className="skill-graph-kv-list">
+                    {Object.entries(selectedNode.metadata).map(([key, value]) => (
+                      <div key={key} className="skill-graph-kv">
+                        <span>{key}</span>
+                        <strong>{value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 <div className="skill-graph-panel__actions">
                   <button
                     type="button"
@@ -275,25 +561,97 @@ const SkillGraphView = () => {
                   >
                     {expandedNodeIds.has(selectedNode.id) ? 'Expanded' : 'Expand Neighborhood'}
                   </button>
-                  <button type="button" className="skill-graph-button skill-graph-button--ghost" onClick={clearSelection}>
+                  <button
+                    type="button"
+                    className="skill-graph-button"
+                    onClick={() => setSourceNodeId(selectedNode.id)}
+                  >
+                    Set As Source
+                  </button>
+                  <button
+                    type="button"
+                    className="skill-graph-button"
+                    onClick={() => setTargetNodeId(selectedNode.id)}
+                  >
+                    Set As Target
+                  </button>
+                  <button
+                    type="button"
+                    className="skill-graph-button skill-graph-button--ghost"
+                    onClick={clearSelection}
+                  >
                     Clear Selection
                   </button>
                 </div>
               </>
             ) : (
               <p className="skill-graph-panel__empty">
-                Click a node to lock focus, center camera, and inspect local relationships.
+                Click a node to inspect metadata and set route endpoints.
               </p>
             )}
           </div>
 
           <div className="skill-graph-panel__section">
+            <h3>Route Activation</h3>
+            <div className="skill-graph-route-card">
+              <div className="skill-graph-mode-tabs">
+                <button
+                  type="button"
+                  className={`skill-graph-tab${pathMode === 'shortest' ? ' skill-graph-tab--active' : ''}`}
+                  onClick={() => handlePathModeChange('shortest')}
+                >
+                  Shortest Route
+                </button>
+                <button
+                  type="button"
+                  className={`skill-graph-tab${pathMode === 'all' ? ' skill-graph-tab--active' : ''}`}
+                  onClick={() => handlePathModeChange('all')}
+                >
+                  All Routes
+                </button>
+              </div>
+              <div className="skill-graph-route-card__row">
+                <span>Source</span>
+                <strong>{sourceNode?.label ?? 'Not set'}</strong>
+              </div>
+              <div className="skill-graph-route-card__row">
+                <span>Target</span>
+                <strong>{targetNode?.label ?? 'Not set'}</strong>
+              </div>
+              <p className="skill-graph-panel__caption">{routeStatusText}</p>
+              {hasResolvedPath ? (
+                <div className="skill-graph-path-list">
+                  {pathNodes.map((node) => (
+                    <button
+                      key={node.id}
+                      type="button"
+                      className="skill-graph-path-node"
+                      onClick={() => focusNode(node.id)}
+                    >
+                      {node.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {hasRouteSelection ? (
+                <button
+                  type="button"
+                  className="skill-graph-button skill-graph-button--ghost"
+                  onClick={clearRoute}
+                >
+                  Clear Route
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="skill-graph-panel__section">
             <h3>Interaction Hints</h3>
             <ul className="skill-graph-list">
-              <li>Hover nodes to highlight immediate neighbors.</li>
-              <li>Click a node to persist focus and dim unrelated context.</li>
-              <li>Use mouse wheel to zoom and drag to pan.</li>
-              <li>Use “Expand Neighborhood” for progressive graph loading.</li>
+              <li>Shortest Route shows one minimum-hop path between source and target.</li>
+              <li>All Routes activates every directed path found between source and target.</li>
+              <li>Group filters hide matching node groups from the current graph view.</li>
+              <li>Search and hover highlights work on the currently visible graph.</li>
             </ul>
           </div>
         </aside>
